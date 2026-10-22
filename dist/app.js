@@ -1,27 +1,31 @@
+import { toolSizes, validSizes, validOverrides, partSpec, toolLabel, fitReason, inspectionItems } from './specs.js';
+import { openPartsMap } from './parts-map.js';
 import { Workshop } from './engine.js';
 import { icons, toolDefs, parts, byId, lessons } from './data.js';
 import { blockReason, requiredDirection, applyPart, validLocations, isRotary, actionName, turnProgress } from './mechanics.js';
 const $ = id => document.getElementById(id);
-let state = { removed: [], locations: {}, tool: 'hand', mode: 'free', lesson: 0, step: 0, completed: [] };
+let state = { removed: [], locations: {}, tool: 'hand', mode: 'free', lesson: 0, step: 0, completed: [], toolSizes: validSizes(), specOverrides: {} };
 try {
   const s = JSON.parse(localStorage.getItem('cw-state-v3'));
   if (s && Array.isArray(s.removed) && s.removed.every(i => byId[i]) && toolDefs.some(t => t[0] === s.tool) && ['free','guide'].includes(s.mode) && Number.isInteger(s.lesson) && lessons[s.lesson] && Number.isInteger(s.step) && s.step >= 0 && s.step <= lessons[s.lesson].steps.length) {
     state = { ...state, ...s, locations: validLocations(s.locations), completed: Array.isArray(s.completed) ? s.completed.filter(i => lessons.some(l => l.id === i)) : [] };
   }
 } catch {}
+state.toolSizes = validSizes(state.toolSizes);
+state.specOverrides = validOverrides(state.specOverrides);
 let studio, work = null, held = false, direction = 'ccw', history = [], lastAimKey = '';
 function save() { try { localStorage.setItem('cw-state-v3', JSON.stringify(state)); } catch { $('saveStatus').textContent = '保存できません'; } }
 function toast(text) { $('toast').textContent = text; $('toast').classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('toast').classList.remove('show'), 3600); }
 function snapshot() { history.push(JSON.stringify(state)); if (history.length > 40) history.shift(); }
 function step() { return lessons[state.lesson].steps[state.step]; }
 function isBusy() { return !!work || !!studio?.carry; }
-function showModal(html) { studio?.unlock(); held = false; $('modalBody').innerHTML = html; $('modal').showModal(); }
+function showModal(html) { studio?.unlock(); studio?.keys.clear(); if(studio)studio.moveAxis={x:0,y:0}; held = false; $('modal').classList.remove('parts-map-modal'); $('modalBody').innerHTML = html; $('modal').showModal(); }
 function advance() {
   state.step++;
   if (!step() && !state.completed.includes(lessons[state.lesson].id)) state.completed.push(lessons[state.lesson].id);
 }
 function dismissEntry() { $('entryHint').hidden = true; }
-function toolName(id) { return toolDefs.find(t => t[0] === id)?.[1] || ''; }
+function toolName(id) { return toolLabel(id, state.toolSizes); }
 function selectedTool(index) {
   if (isBusy()) { toast('作業を終了してから工具を持ち替えます。'); return; }
   state.tool = toolDefs[index][0];
@@ -40,7 +44,7 @@ function aimStatus(aim) {
     else if (state.mode === 'guide' && st && st.part !== id) hint = `今回の対象は「${byId[st.part].name}」です`;
     else if (state.mode === 'guide' && st?.act === 'check') { ready = true; hint = 'E 解説を確認して次へ'; }
     else if (state.mode === 'guide' && !st) hint = 'レッスン完了。自由に整備するにはフリーモードへ';
-    else if (state.tool !== p.tool) hint = `${toolName(p.tool)}が必要${!remove && !['adjust','slide'].includes(p.kind) ? ' · 手で G を押すと運べます' : ''}`;
+    else if (fitReason(id, state.tool, state.toolSizes, state.specOverrides)) hint = fitReason(id, state.tool, state.toolSizes, state.specOverrides);
     else {
       const reason = blockReason(state.removed, id, remove);
       if (reason) hint = reason;
@@ -65,9 +69,12 @@ function render() {
   $('freeMode').setAttribute('aria-selected', String(!guide));
   $('guideMode').setAttribute('aria-selected', String(guide));
   $('guidePanel').hidden = !guide;
-  $('tools').innerHTML = toolDefs.map(([id, name], i) => `<button class="tool ${state.tool === id ? 'active' : ''}" data-tool="${id}" aria-pressed="${state.tool === id}"><span class="tool-key">${i + 1}</span>${icons[id]}<span>${name}</span></button>`).join('');
+  $('tools').innerHTML = toolDefs.map(([id, name], i) => `<button class="tool ${state.tool === id ? 'active' : ''}" data-tool="${id}" aria-pressed="${state.tool === id}"><span class="tool-key">${i + 1}</span>${icons[id]}<span>${name}</span>${toolSizes[id] ? `<small>${state.toolSizes[id]} mm</small>` : ''}</button>`).join('');
   $('toolName').textContent = toolName(state.tool);
-  $('partList').innerHTML = parts.map((p, i) => `<button class="part-row ${state.removed.includes(p.id) ? 'detached' : ''}" data-part="${p.id}"><span class="number">${String(i + 1).padStart(2, '0')}</span><span class="dot"></span>${p.name}<span class="arrow">↗</span></button>`).join('');
+  $('sizeControl').hidden = !toolSizes[state.tool];
+  $('toolSize').innerHTML = (toolSizes[state.tool] || []).map(size => `<option value="${size}" ${size === state.toolSizes[state.tool] ? 'selected' : ''}>${size} mm</option>`).join('');
+  $('toolSize').disabled = isBusy();
+  $('partList').innerHTML = parts.map((p, i) => `<button class="part-row ${state.removed.includes(p.id) ? 'detached' : ''}" data-part="${p.id}"><span class="number">${String(i + 1).padStart(2, '0')}</span><span class="dot"></span><span>${p.name}<small class="part-tool">${toolDefs.find(t=>t[0]===p.tool)[1]}${partSpec(p.id,state.specOverrides).size ? ` ${partSpec(p.id,state.specOverrides).size} mm` : ''}</small></span><span class="arrow">↗</span></button>`).join('');
   const detached=state.removed.filter(id=>!['adjust','slide'].includes(byId[id].kind));
   $('partCount').textContent=parts.length;
   $('assemblyText').textContent=state.removed.length ? `${detached.length}部品を取り外し · ${state.removed.includes('rearSlide')?'チェーン：緩め':'チェーン：張りあり'}` : 'すべて装着済み';
@@ -104,7 +111,11 @@ function checkStep() {
   if (isBusy()) return;
   if (!step()) { startGuide(state.lesson); return; }
   if (step().act !== 'check') return;
-  snapshot(); advance(); render(); if(step())studio.focus(step().part);
+  const items = inspectionItems(step().part, state.step === lessons[state.lesson].steps.length - 1);
+  showModal(`<span class="eyebrow">INSPECTION / 確認練習</span><h2>${step().title}</h2><p>${step().text}</p><div class="inspection-list">${items.map((text,i)=>`<label><input type="checkbox" name="inspection" value="${i}"><span>${text}</span></label>`).join('')}</div><p class="inspection-note">チェックは点検項目の学習用です。3Dモデルが実車の状態を診断するものではありません。</p><button id="finishInspection" class="accent" disabled>3項目を確認して次へ</button>`);
+  const checks = [...$('modalBody').querySelectorAll('[name="inspection"]')];
+  checks.forEach(c=>c.onchange=()=>{ $('finishInspection').disabled = !checks.every(c=>c.checked); });
+  $('finishInspection').onclick = () => { if(!checks.every(c=>c.checked))return; snapshot(); advance(); $('modal').close(); render(); if(step())studio.focus(step().part); };
 }
 function interact() {
   if (work) return;
@@ -119,7 +130,8 @@ function interact() {
     if (st.part !== p.id) { toast(`今回の対象は「${byId[st.part].name}」です。`); return; }
     if (st.act === 'check') { checkStep(); return; }
   }
-  if (state.tool !== p.tool) { toast(`「${toolName(p.tool)}」を持つと操作できます。`); return; }
+  const mismatch = fitReason(p.id, state.tool, state.toolSizes, state.specOverrides);
+  if (mismatch) { toast(mismatch); return; }
   const reason = blockReason(state.removed, p.id, remove);
   if (reason) { toast(reason); return; }
   dismissEntry(); $('partsPanel').hidden = true;
@@ -131,6 +143,7 @@ function interact() {
   $('crosshair').classList.add('engaged');
   $('workOverlay').hidden = false;
   $('operationTag').textContent = p.tool === 'hand' ? 'HANDS ON' : 'TOOL ENGAGED';
+  $('operationSpec').textContent = `${toolName(p.tool)} · ${partSpec(p.id,state.specOverrides).basis}`;
   $('operationName').textContent = `${p.name}を${actionName(p.id,remove)}`;
   const rotary=isRotary(p.id);
   $('operationInstruction').textContent=rotary ? `${p.id==='leftPedal'?'左ペダルは逆ねじ。':'通常の右ねじ。'}工具を当てる側から見た向きです。ダイヤルをなぞるか、回転ボタンを長押し。` : p.desc;
@@ -150,6 +163,7 @@ function updateOperation() {
   $('workDirection').textContent = !isRotary(work.id) ? (work.remove ? '引き抜く' : '差し込む') : work.direction === 'ccw' ? '↶ 反時計回り' : '↷ 時計回り';
   $('holdAction').classList.toggle('working', held);
   $('turnControls').classList.toggle('working',held);
+  $('workAmount').setAttribute('aria-label', '操作進捗・模擬値');
   const angle=work.progress*(byId[work.id].turns||3)*360*(work.direction==='cw'?1:-1);
   $('dialArm').style.transform=`rotate(${angle}deg)`;
   $('workPhase').textContent=isRotary(work.id)?`${work.progress<.18?(work.remove?'固定を緩める':'ねじ山を合わせる'):work.progress<.85?'ねじを送る':work.remove?'ねじが抜ける':'座面に近づく'} · ${(work.progress*(byId[work.id].turns||3)).toFixed(1)}回転（模擬）`:byId[work.id].kind==='slide'?'後輪位置とチェーンのたるみが変化します':work.id==='chain'?'リンクがたわみ、歯から離れます':'位置を確認しながら動かします';
@@ -228,6 +242,20 @@ function crouch() {
   $('crouch').setAttribute('aria-pressed', String(value));
   $('crouch').textContent = value ? 'C 立つ' : 'C しゃがむ';
 }
+$('toolSize').onchange = e => {
+  if(isBusy())return;
+  state.toolSizes[state.tool] = Number(e.target.value);
+  render();
+};
+function showMap() {
+  if(isBusy()){ toast('いまの作業を終了してからマップを開いてください。'); return; }
+  openPartsMap({state, showModal, initial:studio?.aim?.id,
+    save:()=>{ render(); toast('この部品の工具サイズを保存しました。'); },
+    focus:id=>{ $('modal').close(); $('partsPanel').hidden=true; dismissEntry(); studio.setMode('fps'); studio.focus(id); }
+  });
+}
+$('openMap').onclick = showMap;
+$('panelMap').onclick = showMap;
 $('closeModal').onclick = () => $('modal').close();
 $('modal').onclick = e => { if (e.target === $('modal')) $('modal').close(); };
 $('tools').onclick = e => { const b = e.target.closest('[data-tool]'); if (b) selectedTool(toolDefs.findIndex(t => t[0] === b.dataset.tool)); };
@@ -333,7 +361,7 @@ stick.addEventListener('pointermove',e=>{if(e.pointerId===stickId)moveStick(e);}
 for(const event of ['pointerup','pointercancel','lostpointercapture'])stick.addEventListener(event,()=>{stickId=null;studio.moveAxis={x:0,y:0};knob.style.transform='';});
 $('help').onclick = () => showModal(`<span class="eyebrow">FIRST PERSON WORKSHOP</span><h2>持つ。近づく。手を動かす。</h2><table><tr><td>WASD / 矢印</td><td>自転車の周りを移動</td></tr><tr><td>ドラッグ / マウス</td><td>視点を動かす。最初のボタンでマウス視点を有効化</td></tr><tr><td>C</td><td>しゃがむ / 立つ</td></tr><tr><td>1〜5</td><td>手・スパナ・六角レンチ・ペダルレンチ・ラジオペンチ</td></tr><tr><td>E</td><td>狙った部品に工具を合わせる</td></tr><tr><td>左ボタン長押し / Space</td><td>工具を動かす。離すと一時停止</td></tr><tr><td>R</td><td>時計回り / 反時計回り。ねじ頭側から見た方向</td></tr><tr><td>G</td><td>外した部品を持つ / 床に置く（手・フリーモード）</td></tr><tr><td>Esc</td><td>作業を中断 / マウス視点を解除</td></tr></table><p>パーツ一覧から近くへ移動することもできます。取り付けは外した部品を狙い、同じ工具で逆方向に操作します。</p><p>観察モードではドラッグで車体を回して確認できます。スマートフォンでは左下のスティックで移動、3D画面を別の指でスワイプして視点操作。部品を選ぶと近づけます。作業中はダイヤルをなぞるか、方向別ボタンを長押ししてください。</p><button id="lockFromHelp" class="accent">マウスで視点操作を始める ↗</button>`);
 $('modalBody').addEventListener('click', e => { if (e.target.id === 'lockFromHelp') { $('modal').close(); dismissEntry(); studio.lock(); } });
-$('sources').onclick = () => showModal(`<span class="eyebrow">REFERENCE & SCOPE</span><h2>STAR BICYCLEの形を参考に。</h2><p>公式のRadball車体画像を参考に、車輪とフレームの比率、水平に後方へ伸びるサドル支持部、前上方へ曲がる細身のハンドル、ストレートな前フォークを描き直しました。メーカー提供のCADではなく、寸法は画像から近似しています。</p><p>非公式の学習用モデルです。左右別々の車軸ナットと張り調整ねじ、ローラーとプレートのあるチェーン、クリップ式の接続部を操作できます。接続方式と調整ねじは一般的な構造を採用した学習モデルで、STARの実車仕様を断定するものではありません。回転数・移動量は模擬値です。工具寸法・締付トルク・チェーンの張り量・摩耗の正確な診断は未対応です。実車の手順・規格はメーカーの資料を確認してください。</p><p><a href="https://www.starbicycle.com/bike-customizer/radball" target="_blank" rel="noopener">STAR BICYCLE — Radball（形状の参考）</a><br><a href="https://www.parktool.com/en-us/blog/repair-help/pedal-installation-and-removal" target="_blank" rel="noopener">Park Tool — ペダルの脱着</a><br><a href="https://www.parktool.com/en-us/blog/repair-help/chain-replacement-single-speed-bikes" target="_blank" rel="noopener">Park Tool — シングルスピードのチェーン交換</a><br><a href="https://www.parktool.com/en-int/blog/repair-help/wheel-removal-and-installation" target="_blank" rel="noopener">Park Tool — ホイールの脱着</a></p>`);
+$('sources').onclick = () => showModal(`<span class="eyebrow">REFERENCE & SCOPE</span><h2>STAR BICYCLEの形を参考に。</h2><p>公式のRadball車体画像を参考に、車輪とフレームの比率、水平に後方へ伸びるサドル支持部、前上方へ曲がる細身のハンドル、ストレートな前フォークを描き直しました。メーカー提供のCADではなく、寸法は画像から近似しています。</p><p>非公式の学習用モデルです。左右別々の車軸ナットと張り調整ねじ、ローラーとプレートのあるチェーン、クリップ式の接続部を操作できます。接続方式と調整ねじは一般的な構造を採用した学習モデルで、STARの実車仕様を断定するものではありません。回転数・移動量は模擬値です。工具サイズは選択・適合判定に対応していますが、初期寸法は練習用の仮設定です。部品マップで寸法を変更し、Star公式の掲載工具・規格を確認できます。締付トルク・チェーンの張り量・摩耗の正確な診断は未対応です。実車の手順・規格はメーカーの資料を確認してください。</p><p><a href="https://www.starbicycle.com/shop" target="_blank" rel="noopener">STAR BICYCLE — 公式工具・部品カタログ</a><br><a href="https://www.starbicycle.com/bike-customizer/radball" target="_blank" rel="noopener">STAR BICYCLE — Radball（形状の参考）</a><br><a href="https://www.parktool.com/en-us/blog/repair-help/pedal-installation-and-removal" target="_blank" rel="noopener">Park Tool — ペダルの脱着</a><br><a href="https://www.parktool.com/en-us/blog/repair-help/chain-replacement-single-speed-bikes" target="_blank" rel="noopener">Park Tool — シングルスピードのチェーン交換</a><br><a href="https://www.parktool.com/en-int/blog/repair-help/wheel-removal-and-installation" target="_blank" rel="noopener">Park Tool — ホイールの脱着</a></p>`);
 try {
   studio = new Workshop($('viewport'), {
     aim: aimStatus, tick, interact, hold, reverse, grab: grabPart, crouch,
