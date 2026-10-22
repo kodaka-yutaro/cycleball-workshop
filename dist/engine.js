@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from './OrbitControls.js';
 import { SVGRenderer } from './SVGRenderer.js';
 import { parts, byId } from './data.js';
+import { isRotary } from './mechanics.js';
 const V = a => new THREE.Vector3(...a);
 export class Workshop {
   constructor(host, callbacks) {
@@ -9,6 +10,10 @@ export class Workshop {
     this.cb = callbacks;
     this.mode = 'fps';
     this.keys = new Set();
+    this.moveAxis = { x: 0, y: 0 };
+    this.slack = 0;
+    this.chainLinks = [];
+    this.threadMeshes = {};
     this.groups = {};
     this.base = {};
     this.anchors = {};
@@ -64,6 +69,8 @@ export class Workshop {
       const w = host.clientWidth, h = host.clientHeight;
       this.renderer.setSize(w, h);
       this.camera.aspect = w / h;
+      if(this.work && w <= 640) this.camera.setViewOffset(w,h,0,h*(h<520?.35:.23),w,h);
+      else this.camera.clearViewOffset();
       this.camera.updateProjectionMatrix();
     });
     this.resize.observe(host);
@@ -185,23 +192,46 @@ export class Workshop {
       this.tube([x + .07, 1.03, 0], [x + .075, 1.068, 0], .005, chrome, g);
       if (id === 'rearWheel') this.ring(.053, .012, chrome, [x, hubY, .135], g);
     }
-    for (const [x, id] of [[front, 'frontNuts'], [rear, 'rearNuts']]) {
-      const g = this.group(id);
-      for (const z of [-.14, .14]) {
-        const n = this.mesh(new THREE.CylinderGeometry(.033, .033, .032, 6), chrome, [x, hubY, z], g);
-        n.rotation.x = Math.PI / 2;
-        this.ring(.026, .006, silver, [x, hubY, z - Math.sign(z) * .025], g);
-      }
-      this.anchors[id] = [x, hubY, .162];
+    for (const [x, id, side] of [[front,'frontNuts',1],[front,'frontNutLeft',-1],[rear,'rearNuts',1],[rear,'rearNutLeft',-1]]) {
+      const g = this.group(id), z = side * .14;
+      const n = this.mesh(new THREE.CylinderGeometry(.033,.033,.032,6),chrome,[x,hubY,z],g);
+      n.rotation.x = Math.PI / 2;
+      this.ring(.026,.006,silver,[x,hubY,z-side*.025],g);
+      this.anchors[id] = [x,hubY,side*.162];
+      this.normals[id] = [0,0,side];
+      // Exposed axle and individual helical thread ridges.
+      this.tube([x,hubY,side*.09],[x,hubY,side*.182],.012,chrome,this.groups[x===front?'frontWheel':'rearWheel']);
+      for(let j=0;j<9;j++) this.ring(.013,.0015,frame,[x,hubY,side*(.12+j*.006)],this.groups[x===front?'frontWheel':'rearWheel']);
     }
-    const ch = this.group('chain');
-    const points = [[-.16, .616, .142], [-.8, .621, .142], [-.862, .56, .142], [-.8, .499, .142], [-.16, .384, .142], [-.044, .50, .142], [-.16, .616, .142]];
-    const chainCurve = new THREE.CatmullRomCurve3(points.map(V), false, 'centripetal');
-    for (let i = 0; i < 74; i++) {
-      const a = chainCurve.getPoint(i / 74), b = chainCurve.getPoint((i + .72) / 74);
-      this.tube(a.toArray(), b.toArray(), .007, chrome, ch);
+    for (const [id, side] of [['adjustRight',1],['adjustLeft',-1]]) {
+      const g=this.group(id), z=side*.105;
+      this.mesh(new THREE.BoxGeometry(.08,.08,.022),silver,[-.88,.56,z],f);
+      this.tube([-.88,.56,z],[-.99,.56,z],.008,chrome,g);
+      const bolt=this.mesh(new THREE.CylinderGeometry(.018,.018,.018,6),chrome,[-.99,.56,z],g);
+      bolt.rotation.z=Math.PI/2;
+      this.anchors[id]=[-1.005,.56,z]; this.normals[id]=[-1,0,0];
     }
-    this.anchors.chain = [-.43, .61, .142];
+    const slide=this.group('rearSlide');
+    this.ring(.046,.005,chrome,[-.8,.56,.09],slide);
+    this.anchors.rearSlide=[-.8,.56,.09];
+    const ch=this.group('chain');
+    // Rollers and alternating inner/outer plates, reused as the chain deforms.
+    const rollerGeo=new THREE.CylinderGeometry(.006,.006,.022,6);
+    const plateGeo=new THREE.BoxGeometry(.020,.009,.003);
+    for(let i=0;i<82;i++) {
+      const link=new THREE.Group(); ch.add(link);
+      const roller=this.mesh(rollerGeo,chrome,[0,0,0],link); roller.rotation.x=Math.PI/2;
+      for(const side of [-1,1]) this.mesh(plateGeo,i%2?chrome:frame,[.008,0,side*(i%2?.012:.008)],link);
+      this.chainLinks.push(link);
+    }
+    this.anchors.chain=[-.35,.60,.142];
+    const clip=this.group('chainClip');
+    this.path([[-.479,.616,.167],[-.491,.616,.167],[-.495,.611,.167],[-.491,.606,.167],[-.465,.606,.167]],.0025,accent,clip);
+    this.anchors.chainClip=[-.48,.611,.17];
+    const link=this.group('chainLink');
+    this.mesh(new THREE.BoxGeometry(.038,.013,.004),silver,[-.48,.611,.157],link);
+    for(const x of [-.492,-.468]) this.tube([x,.611,.126],[x,.611,.164],.004,chrome,link);
+    this.anchors.chainLink=[-.48,.611,.16];
     for (const [id, x, y, z] of [['rightPedal', .13, .53, .25], ['leftPedal', -.45, .47, -.25]]) {
       const g = this.group(id);
       this.tube([x, y, z > 0 ? .16 : -.14], [x, y, z], .013, chrome, g);
@@ -224,6 +254,7 @@ export class Workshop {
     this.mesh(new THREE.BoxGeometry(.075, .06, .095), chrome, [.32, 1.47, 0], bc);
     const bh = this.mesh(new THREE.CylinderGeometry(.022, .022, .02, 6), frame, [.32, 1.472, .06], bc);
     bh.rotation.x = Math.PI / 2;
+    this.threadMeshes.barBolts = bh;
     this.anchors.barBolts = [.32, 1.472, .075];
     const saddle = this.group('saddle');
     this.tube([-.61, 1.296, 0], [-1.16, 1.296, 0], .024, frame, saddle);
@@ -237,16 +268,38 @@ export class Workshop {
     collar.rotation.y = Math.PI / 2;
     this.tube([-.68, 1.265, -.04], [-.68, 1.265, .04], .011, chrome, sc);
     this.anchors.seatBolt = [-.68, 1.265, .05];
+    this.threadMeshes.seatBolt = sc.children[1];
     for (const p of parts) {
       const g = this.groups[p.id];
       const box = new THREE.Box3().setFromObject(g);
-      const center = box.getCenter(new THREE.Vector3());
-      this.sizes[p.id] = box.getSize(new THREE.Vector3());
+      const center = p.id === 'chain' ? new THREE.Vector3(-.45,.50,.142) : box.getCenter(new THREE.Vector3());
+      if (isRotary(p.id)) center.copy(V(this.anchors[p.id]));
+      this.sizes[p.id] = p.id==='chain'?new THREE.Vector3(.6,.5,.03):box.getSize(new THREE.Vector3());
       for (const child of g.children) child.position.sub(center);
       g.position.copy(center);
       this.base[p.id] = center;
       if (!this.anchors[p.id]) this.anchors[p.id] = center.toArray();
       g.traverse(o => { o.userData.part = p.id; });
+      if(this.threadMeshes[p.id]) this.threadMeshes[p.id].userData.restQ=this.threadMeshes[p.id].quaternion.clone();
+    }
+  }
+  updateChain(slack, opened, off) {
+    const key=[slack,opened,off].map(n=>n.toFixed(3)).join('|');
+    if(this.chainKey===key) return; this.chainKey=key;
+    const rear=-.8+slack*.065;
+    const curve=new THREE.CatmullRomCurve3([
+      [-.455+opened*.018,.611,.142],[-.16,.616,.142],[-.044,.50,.142],[-.16,.384,.142],
+      [-.48,.435-slack*.09,.142],[rear,.499,.142],[rear-.062,.56,.142],[rear,.621,.142],[-.505-opened*.018,.611,.142]
+    ].map(V));
+    for(let i=0;i<this.chainLinks.length;i++) {
+      const t=i/(this.chainLinks.length-1), next=Math.min(1,t+.006);
+      const a=curve.getPoint(t), b=curve.getPoint(next);
+      const hanging=new THREE.Vector3(-.72+t*.54,.61-Math.sin(t*Math.PI)*.44,.142);
+      const hangingNext=new THREE.Vector3(-.72+next*.54,.61-Math.sin(next*Math.PI)*.44,.142);
+      a.lerp(hanging,off); b.lerp(hangingNext,off);
+      const link=this.chainLinks[i]; link.position.copy(a.sub(this.base.chain));
+      const tangent=b.sub(a.clone().add(this.base.chain));
+      if(tangent.lengthSq()) link.quaternion.setFromUnitVectors(new THREE.Vector3(1,0,0),tangent.normalize());
     }
   }
   setTool(id) {
@@ -264,6 +317,14 @@ export class Workshop {
       jaw.rotation.z = Math.PI * .75;
       this.tube([0, -.03, 0], [0, -.28, 0], .013, chrome, g);
       this.mesh(new THREE.BoxGeometry(.035, .16, .021), accent, [0, -.25, 0], g);
+    } else if (id === 'pliers') {
+      this.jaws=[];
+      for(const side of [-1,1]) {
+        const jaw=new THREE.Group();g.add(jaw);this.jaws.push(jaw);
+        this.tube([side*.008,.035,0],[0,-.06,0],.008,chrome,jaw);
+        this.tube([0,-.06,0],[side*.05,-.24,0],.014,accent,jaw);
+      }
+      this.mesh(new THREE.SphereGeometry(.017,8,6),chrome,[0,-.06,0],g);
     } else if (id === 'hex') {
       this.tube([0, 0, .025], [0, 0, .095], .009, chrome, g);
       this.tube([0, 0, .095], [0, -.25, .095], .009, chrome, g);
@@ -290,7 +351,7 @@ export class Workshop {
   point(id) {
     const point = V(this.anchors[id]);
     const moved = this.groups[id].position.clone().sub(this.base[id]);
-    if (id.endsWith('Nuts') && this.camera.position.z < 0) point.z = -.162;
+
     return point.add(moved);
   }
   normal(id) {
@@ -310,9 +371,17 @@ export class Workshop {
   }
   focus(id) {
     if (this.work || this.carry) return;
+    const data=byId[id], g=this.groups[id];
+    g.position.copy(this.base[id]);
+    if(this.removed.includes(id)) {
+      if(data.kind==='adjust') g.position.x-=.025;
+      else if(data.kind!=='slide')g.position.add(this.offset(id));
+    }
+    if((id==='rearWheel'||id==='rearSlide')&&this.removed.includes('rearSlide'))g.position.x+=.065;
     const p = this.point(id);
-    const side = id === 'leftPedal' ? -1 : 1;
-    this.camera.position.copy(p).add(new THREE.Vector3(.08, .18, side * 1.0));
+    const normal=this.normal(id);
+    this.camera.position.copy(p).addScaledVector(normal, .95).add(new THREE.Vector3(0,.12,0));
+    this.focusTarget=id;
     this.camera.position.y = Math.max(.45, this.camera.position.y);
     this.orbit.target.copy(p);
     this.lookAt(p);
@@ -350,12 +419,14 @@ export class Workshop {
       if (this.mode !== 'fps') return;
       this.host.focus({ preventScroll: true });
       if (e.button === 0 && this.work) { this.cb.hold(true); return; }
-      pointer = { x: e.clientX, y: e.clientY, moved: false };
+      if(pointer) return;
+      pointer = { id:e.pointerId, x: e.clientX, y: e.clientY, moved: false };
       if (!this.isLocked()) el.setPointerCapture?.(e.pointerId);
     });
     const move = e => {
       if (this.mode !== 'fps' || this.work || document.querySelector('dialog[open]')) return;
-      if (!this.isLocked() && !pointer) return;
+      if (!this.isLocked() && (!pointer || pointer.id !== e.pointerId)) return;
+      this.focusTarget=null;
       const dx = this.isLocked() ? e.movementX : e.clientX - pointer.x;
       const dy = this.isLocked() ? e.movementY : e.clientY - pointer.y;
       this.yaw -= dx * .003;
@@ -364,8 +435,9 @@ export class Workshop {
       if (pointer) { pointer.x = e.clientX; pointer.y = e.clientY; pointer.moved ||= Math.abs(dx) + Math.abs(dy) > 2; }
     };
     document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', () => { pointer = null; this.cb.hold(false); });
-    document.addEventListener('pointercancel', () => { pointer = null; this.cb.hold(false); });
+    const release=e=>{ if(pointer?.id===e.pointerId) pointer=null; if(e.target===el) this.cb.hold(false); };
+    document.addEventListener('pointerup',release);
+    document.addEventListener('pointercancel',release);
     el.addEventListener('contextmenu', e => e.preventDefault());
     this.host.addEventListener('wheel', e => {
       if (this.mode !== 'fps' || this.work) return;
@@ -386,7 +458,7 @@ export class Workshop {
       if (e.code === 'KeyG') this.cb.grab();
       if (e.code === 'KeyC' && !this.work) this.cb.crouch();
       if (e.code === 'Escape') { this.cb.cancel(); this.keys.clear(); }
-      if (/Digit[1-4]/.test(e.code)) this.cb.selectTool(Number(e.code.at(-1)) - 1);
+      if (/Digit[1-5]/.test(e.code)) this.cb.selectTool(Number(e.code.at(-1)) - 1);
     });
     document.addEventListener('keyup', e => {
       this.keys.delete(e.code);
@@ -394,11 +466,11 @@ export class Workshop {
     });
     document.addEventListener('pointerlockchange', () => {
       document.body.classList.toggle('locked', this.isLocked());
-      if (!this.isLocked()) { this.keys.clear(); this.cb.hold(false); }
+      if (!this.isLocked()) { this.keys.clear(); this.moveAxis={x:0,y:0}; this.cb.hold(false); }
       this.cb.lockChanged?.(this.isLocked());
     });
-    window.addEventListener('blur', () => { this.keys.clear(); this.cb.hold(false); });
-    document.addEventListener('visibilitychange', () => { if (document.hidden) { this.keys.clear(); this.cb.hold(false); } });
+    window.addEventListener('blur', () => { this.keys.clear(); this.moveAxis={x:0,y:0}; this.cb.hold(false); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { this.keys.clear(); this.moveAxis={x:0,y:0}; this.cb.hold(false); } });
     el.addEventListener('click', e => {
       if (this.mode !== 'orbit') return;
       const rect = el.getBoundingClientRect();
@@ -413,6 +485,7 @@ export class Workshop {
     pos.y = THREE.MathUtils.clamp(pos.y, .35, 2.5);
     // A small collision volume prevents walking through the assembled bicycle.
     if (pos.x > -1.5 && pos.x < 1.4 && Math.abs(pos.z) < .36) return;
+    this.focusTarget=null;
     this.camera.position.copy(pos);
   }
   updateAim() {
@@ -424,24 +497,37 @@ export class Workshop {
     let chosen = hits[0] ? { id: hits[0].object.userData.part, distance: hits[0].distance } : null;
     // Small fasteners have forgiving, visible-in-context target areas.
     for (const p of parts) {
-      if (p.tool === 'hand') continue;
+      if (p.tool === 'hand' && !['rearSlide','chainLink'].includes(p.id)) continue;
       const point = this.point(p.id);
-      const radius = p.id.endsWith('Nuts') ? .055 : .043;
+      const radius = p.id === 'rearSlide' ? .065 : .040;
       const hit = this.ray.ray.intersectSphere(new THREE.Sphere(point, radius), new THREE.Vector3());
       if (!hit) continue;
       const distance = this.camera.position.distanceTo(hit);
-      const visibleSide = p.id !== 'leftPedal' || this.camera.position.z < .05;
+      const visibleSide = !p.side || this.camera.position.z*p.side>0;
       if (visibleSide && (!chosen || distance < chosen.distance + .07)) chosen = { id: p.id, distance };
+    }
+    if(this.focusTarget) {
+      const point=this.point(this.focusTarget);
+      if(this.ray.ray.distanceToPoint(point)<.075) chosen={id:this.focusTarget,distance:this.camera.position.distanceTo(point)};
     }
     if (chosen && chosen.distance > 5) chosen = null;
     this.aim = chosen;
     this.cb.aim(chosen);
   }
   engage(id) {
-    const point = this.point(id), normal = this.normal(id);
+    const normal = this.normal(id);
+    if(this.removed.includes(id) && isRotary(id)) this.groups[id].position.copy(this.base[id]).addScaledVector(normal,byId[id].kind==='adjust'?.025:.045);
+    const point = this.point(id);
     this.work = { id, point, normal, progress: 0, active: false, angle: 0, direction: 'ccw', time: 0 };
-    this.keys.clear();
-    this.lookAt(point);
+    this.keys.clear(); this.moveAxis={x:0,y:0};
+    // Align the view with the spindle so clockwise matches the tool-side diagram.
+    const viewPoint=isRotary(id)?point:point.clone().lerp(V(this.anchors[id]),.5);
+    this.camera.position.copy(viewPoint).addScaledVector(normal,isRotary(id)?.78:1.15);
+    this.lookAt(viewPoint);
+    if(this.host.clientWidth<=640) {
+      const w=this.host.clientWidth,h=this.host.clientHeight;
+      this.camera.setViewOffset(w,h,0,h*(h<520?.35:.23),w,h);
+    }
   }
   setWork(progress, active, direction) {
     if (!this.work) return;
@@ -450,8 +536,9 @@ export class Workshop {
     this.work.direction = direction;
   }
   disengage() {
-    if (this.work) this.groups[this.work.id].quaternion.identity();
+    if(this.work) { const id=this.work.id; this.groups[id].quaternion.identity(); const mesh=this.threadMeshes[id]; if(mesh)mesh.quaternion.copy(mesh.userData.restQ); }
     this.work = null;
+    this.camera.clearViewOffset();
   }
   grab(id) { this.carry = id; this.work = null; }
   drop() {
@@ -484,13 +571,13 @@ export class Workshop {
     else if (!this.work && !document.querySelector('dialog[open]')) {
       const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
       const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-      const move = new THREE.Vector3();
+      const move = new THREE.Vector3().addScaledVector(right,this.moveAxis.x).addScaledVector(forward,-this.moveAxis.y);
       if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) move.add(forward);
       if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) move.sub(forward);
       if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) move.add(right);
       if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) move.sub(right);
       if (move.lengthSq()) {
-        move.normalize().multiplyScalar(dt * (this.keys.has('ShiftLeft') ? 2 : 1));
+        move.clampLength(0,1).multiplyScalar(dt * (this.keys.has('ShiftLeft') ? 2 : 1));
         this.moveTo(this.camera.position.clone().add(move));
       }
       if (this.crouchMoving) {
@@ -499,14 +586,25 @@ export class Workshop {
         if (Math.abs(goal - this.camera.position.y) < .01) this.crouchMoving = false;
       }
     }
+    const phase=id=>this.work?.id===id ? (this.removed.includes(id)?1-this.work.progress:this.work.progress) : (this.removed.includes(id)?1:0);
+    this.slack=phase('rearSlide');
+    this.updateChain(this.slack,phase('chainLink'),phase('chain'));
     for (const p of parts) {
+      const g=this.groups[p.id];
       if (this.carry === p.id) {
         const dest = new THREE.Vector3(0, -.13, -.80).applyQuaternion(this.camera.quaternion).add(this.camera.position);
-        this.groups[p.id].position.lerp(dest, Math.min(1, dt * 12));
+        g.position.lerp(dest,Math.min(1,dt*12));
       } else {
-        const target = this.base[p.id].clone();
-        if (this.removed.includes(p.id)) target.add(this.offset(p.id));
-        this.groups[p.id].position.lerp(target, Math.min(1, dt * 8));
+        const target=this.base[p.id].clone(), amount=phase(p.id);
+        if(p.id==='rearWheel' || p.id==='rearSlide') target.x+=this.slack*.065;
+        if(p.kind==='adjust') target.x-=amount*.025;
+        else if(p.kind!=='slide') {
+          if(this.work?.id===p.id && isRotary(p.id)) target.addScaledVector(this.normal(p.id),amount*.045);
+          else if(this.work?.id===p.id && p.kind==='clip') target.x+=amount*.045;
+          else target.addScaledVector(this.offset(p.id),amount);
+        }
+        if(['chainClip','chainLink'].includes(p.id)) target.y-=this.slack*.006;
+        g.position.lerp(target,Math.min(1,dt*12));
       }
     }
     const handRest = new THREE.Vector3(.28, -.23, -.59).applyQuaternion(this.camera.quaternion).add(this.camera.position);
@@ -514,16 +612,23 @@ export class Workshop {
     if (this.work) {
       const w = this.work;
       if (w.active) w.time += dt;
-      const stroke = (w.time % .70) / .70;
-      const swing = Math.sin(stroke * Math.PI) * .95;
-      const sign = w.direction === 'ccw' ? 1 : -1;
-      const offset = w.normal.clone().multiplyScalar(.025);
-      if (this.tool === 'hand') offset.addScaledVector(w.normal, w.progress * .13);
-      this.toolGroup.position.lerp(w.point.clone().add(offset), Math.min(1, dt * 12));
-      const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), w.normal);
-      rotation.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), this.tool === 'hand' ? 0 : sign * swing));
-      this.toolGroup.quaternion.slerp(rotation, Math.min(1, dt * 15));
-      if (this.tool !== 'hand') this.groups[w.id].quaternion.setFromAxisAngle(w.normal, w.progress * Math.PI * 4 * sign);
+      const rotary=isRotary(w.id), sign=w.direction==='ccw'?1:-1;
+      const total=w.progress*Math.PI*2*(byId[w.id].turns||3);
+      const stroke=total%(Math.PI*.55);
+      const offset=w.normal.clone().multiplyScalar(.035);
+      if(!rotary) offset.addScaledVector(w.normal,w.progress*.12);
+      const contact=this.point(w.id);
+      this.toolGroup.position.lerp(contact.clone().add(offset),Math.min(1,dt*12));
+      const rotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1),w.normal);
+      rotation.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),rotary?sign*stroke:0));
+      this.toolGroup.quaternion.copy(rotation);
+      if(rotary) {
+        const mesh=this.threadMeshes[w.id];
+        const q=new THREE.Quaternion().setFromAxisAngle(w.normal,sign*total);
+        if(mesh) mesh.quaternion.copy(q).multiply(mesh.userData.restQ);
+        else this.groups[w.id].quaternion.copy(q);
+      }
+      if(this.tool==='pliers') for(let i=0;i<this.jaws.length;i++) this.jaws[i].rotation.z=(i?1:-1)*(.2-Math.sin(w.progress*Math.PI)*.16);
     } else {
       this.toolGroup.position.lerp(handRest, Math.min(1, dt * 12));
       const rotation = this.camera.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -.36));
