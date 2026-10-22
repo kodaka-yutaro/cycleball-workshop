@@ -46,17 +46,16 @@ Node.js 20以上。Three.js 0.180.0と必要な拡張をdistに同梱し、3Dの
 
 ## 公開
 
-GitHubを管理元とし、`dist/`を静的サイトとして配信してください。ホスティング専用SDK、サーバー、APIキーは不要です。
+公開サイト: https://kodaka-yutaro.github.io/cycleball-workshop/
 
-Cloudflare PagesへGitHubリポジトリを接続する場合の構成:
+GitHub Pagesで`dist/`を配信しています。`main`へのpushで`.github/workflows/pages.yml`が構文チェックとテストを実行し、成功するとサイトを自動更新します。Actions画面から手動で再公開することもできます。
 
-- Framework preset: None
-- Build command: 空欄
-- Build output directory: dist
-- Root directory: リポジトリのルート
-- カスタムドメイン候補: cycleball.kdking-tools.com
+- PagesのSource: GitHub Actions
+- 配信ディレクトリ: dist
+- サーバー・APIキー・ビルド用パッケージのインストール: 不要
+- カスタムドメイン候補: cycleball.kdking-tools.com（未接続）
 
-既存のChatGPT Sites試作とは別の配信先です。旧試作向けのDNSレコードをそのまま使用せず、選択した配信先が提示するレコードを設定してください。自動デプロイ設定はまだ追加していません。
+独自ドメインへの切り替えにはGitHub Pages側とDNS側の設定が必要です。旧ChatGPT Sites試作用のDNSレコードは使用しません。
 
 ## 実装
 
