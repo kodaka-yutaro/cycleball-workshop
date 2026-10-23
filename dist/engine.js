@@ -302,7 +302,8 @@ export class Workshop {
       if(tangent.lengthSq()) link.quaternion.setFromUnitVectors(new THREE.Vector3(1,0,0),tangent.normalize());
     }
   }
-  setTool(id) {
+  setTool(id, size) {
+    this.toolSize = size;
     this.tool = id;
     if (!this.toolGroup) return;
     while (this.toolGroup.children.length) {
@@ -312,7 +313,7 @@ export class Workshop {
     }
     const g = this.toolGroup, { chrome, accent, glove, cuff } = this.materials;
     if (id === 'wrench' || id === 'pedal') {
-      const r = id === 'pedal' ? .042 : .035;
+      const r = (id === 'pedal' ? .042 : .035) * ((size || 15) / 15);
       const jaw = this.ring(r, .011, chrome, [0, 0, 0], g, Math.PI * 1.48);
       jaw.rotation.z = Math.PI * .75;
       this.tube([0, -.03, 0], [0, -.28, 0], .013, chrome, g);
@@ -326,8 +327,8 @@ export class Workshop {
       }
       this.mesh(new THREE.SphereGeometry(.017,8,6),chrome,[0,-.06,0],g);
     } else if (id === 'hex') {
-      this.tube([0, 0, .025], [0, 0, .095], .009, chrome, g);
-      this.tube([0, 0, .095], [0, -.25, .095], .009, chrome, g);
+      this.tube([0, 0, .025], [0, 0, .095], .009 * ((size || 6) / 6), chrome, g);
+      this.tube([0, 0, .095], [0, -.25, .095], .009 * ((size || 6) / 6), chrome, g);
       this.mesh(new THREE.BoxGeometry(.06, .07, .03), accent, [0, -.19, .095], g);
     }
     const y = id === 'hand' ? -.02 : -.22, z = id === 'hex' ? .095 : 0;
@@ -343,7 +344,7 @@ export class Workshop {
   sync(state) {
     this.removed = state.removed;
     this.locations = state.locations || {};
-    if (state.tool !== this.tool) this.setTool(state.tool);
+    if (state.tool !== this.tool || state.toolSizes?.[state.tool] !== this.toolSize) this.setTool(state.tool, state.toolSizes?.[state.tool]);
   }
   offset(id) {
     return V(this.locations[id] || byId[id].offset);

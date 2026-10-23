@@ -1,1 +1,10 @@
-{"name":"cycleball-workshop","version":"0.2.0","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","check":"node --check dist/app.js && node --check dist/engine.js && node --check dist/data.js && node --check dist/mechanics.js"}}
+{
+  "name": "cycleball-workshop",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check dist/app.js && node --check dist/engine.js && node --check dist/data.js && node --check dist/mechanics.js && node --check dist/specs.js && node --check dist/parts-map.js"
+  }
+}
